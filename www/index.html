@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Azure JSON → Mermaid - v1.0</title>
+
+  <link rel="stylesheet" href="style.css" />
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    import "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.1.4/dist/mermaid-layout-elk.esm.min.mjs";
+
+    window.mermaid = mermaid;
+    const MERMAID_MODULE_URL = import.meta.url;
+
+    function initMermaid() {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "loose",
+        theme: "default",
+        flowchart: {
+          defaultRenderer: "elk",
+          htmlLabels: true,
+          useMaxWidth: true,
+          diagramPadding: 24,
+          nodeSpacing: 80,
+          rankSpacing: 120
+        }
+      });
+      const cfg = mermaid.getConfig?.() || {};
+      window.mermaidInfo = {
+        version: mermaid.version ?? "n/a",
+        moduleUrl: MERMAID_MODULE_URL,
+        renderer: cfg.flowchart?.defaultRenderer ?? "n/a",
+        theme: cfg.theme ?? "default",
+        securityLevel: cfg.securityLevel ?? "loose"
+      };
+      window.dispatchEvent(new CustomEvent("mermaid:ready", { detail: window.mermaidInfo }));
+    }
+    window.initMermaid = initMermaid;
+    document.addEventListener("DOMContentLoaded", initMermaid);
+  </script>
+</head>
+<body class="app-shell">
+  <header class="app-header is-sticky">
+    <div class="container">
+      <div class="app-header__inner">
+        <div class="app-title">Azure JSON → Mermaid</div>
+        <div class="app-subtitle">Topology diagrams</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <div class="container">
+
+      <!-- 1) Input JSON -->
+      <section class="card">
+        <div class="card-header">
+          <h2>Input JSON</h2>
+          <label class="switch">
+            <input id="debugToggle" type="checkbox" />
+            <span>Debug</span>
+          </label>
+        </div>
+        <p class="subtitle">Import JSON file or copy &amp; paste JSON here.</p>
+
+        <div class="row">
+          <!-- Hidden native file input + single visible button -->
+          <input type="file" id="jsonFile" accept=".json" hidden />
+          <label class="btn" for="jsonFile">Import JSON file</label>
+          <span id="fileName" class="muted"></span>
+
+          <button class="btn primary" id="renderBtn">Render</button>
+        </div>
+
+        <textarea id="jsonText" placeholder='Paste JSON here...'></textarea>
+      </section>
+
+      <!-- 2) Rendered Mermaid Code -->
+      <section class="card">
+        <div class="card-header">
+          <h2>Rendered Mermaid Code</h2>
+          <button class="btn" id="copyBtn" title="Copy Mermaid code">Copy code</button>
+        </div>
+        <textarea id="mermaidCode" readonly placeholder="Generated Mermaid code will appear here..."></textarea>
+      </section>
+
+      <!-- 3) Rendered Mermaid Diagram -->
+      <section class="card">
+        <div class="card-header">
+          <h2>Rendered Mermaid Diagram</h2>
+          <button class="btn" id="downloadSvgBtn">Download SVG</button>
+        </div>
+        <div id="diagram" class="diagram"></div>
+      </section>
+
+      <!-- 4) Debug Panel -->
+      <section class="card debug" id="debugPanel" hidden>
+        <h2>Debug</h2>
+        <div class="debug-grid">
+          <div>
+            <div class="debug-label">Status</div>
+            <pre id="dbgStatus" class="debug-pre">—</pre>
+          </div>
+          <div>
+            <div class="debug-label">Errors</div>
+            <pre id="dbgErrors" class="debug-pre">—</pre>
+          </div>
+          <div>
+            <div class="debug-label">Environment</div>
+            <pre id="dbgEnv" class="debug-pre">—</pre>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="app-footer">
+    <div class="container">
+      Created by James Wright 2025
+    </div>
+  </footer>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+
+    // Debug helpers
+    function setDebugVisible(v) { $("#debugPanel").hidden = !v; }
+    function dbgWrite(sel, text) {
+      const node = $(sel);
+      node.textContent = (text && String(text).trim()) ? text : "—";
+    }
+    function dbgReset() {
+      const info = window.mermaidInfo || {};
+      const envLines = [
+        `Mermaid version: ${info.version || "unknown"}`,
+        `Renderer: ${info.renderer || "unknown"}`,
+        `Theme: ${info.theme || "default"}`,
+        `Security: ${info.securityLevel || ""}`,
+        `Module: ${info.moduleUrl || ""}`,
+        `UA: ${navigator.userAgent}`
+      ];
+      dbgWrite("#dbgStatus", "—");
+      dbgWrite("#dbgErrors", "—");
+      dbgWrite("#dbgEnv", envLines.join("\\n"));
+    }
+
+    // Single file input → textarea + filename text
+    $("#jsonFile").addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      $("#fileName").textContent = f.name;
+      const txt = await f.text();
+      $("#jsonText").value = txt;
+    });
+
+    // Copy Mermaid code
+    $("#copyBtn").addEventListener("click", async () => {
+      const code = $("#mermaidCode").value;
+      try {
+        await navigator.clipboard.writeText(code);
+        $("#copyBtn").textContent = "Copied!";
+        setTimeout(() => $("#copyBtn").textContent = "Copy code", 900);
+      } catch {
+        $("#mermaidCode").select();
+        document.execCommand("copy");
+      }
+    });
+
+    // Download SVG
+    $("#downloadSvgBtn").addEventListener("click", () => {
+      const svgEl = document.querySelector("#diagram svg");
+      if (!svgEl) { alert("Render a diagram first."); return; }
+      const svgText = serializeSvgForDownload(svgEl);
+      const blob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "diagram.svg";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    function serializeSvgForDownload(svgEl) {
+      const clone = svgEl.cloneNode(true);
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      if (!clone.getAttribute("width") || !clone.getAttribute("height")) {
+        const vb = (clone.getAttribute("viewBox") || "").trim().split(/\\s+/).map(Number);
+        if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
+          clone.setAttribute("width", String(Math.ceil(vb[2])));
+          clone.setAttribute("height", String(Math.ceil(vb[3])));
+        }
+      }
+      return new XMLSerializer().serializeToString(clone);
+    }
+
+    // Debug toggle
+    $("#debugToggle").addEventListener("change", (e) => {
+      setDebugVisible(e.target.checked);
+      if (e.target.checked) dbgReset();
+    });
+
+    // Render flow
+    $("#renderBtn").addEventListener("click", renderDiagram);
+
+    async function renderDiagram() {
+      const debugOn = $("#debugToggle").checked;
+      if (debugOn) dbgReset();
+
+      $("#diagram").innerHTML = "";
+      $("#mermaidCode").value = "";
+
+      const fd = new FormData();
+      fd.append("jsonText", $("#jsonText").value);
+      fd.append("layout", "LR");
+      const f = $("#jsonFile").files?.[0];
+      if (f) fd.append("jsonFile", f);
+
+      const t0 = performance.now();
+      let data;
+      try {
+        const res = await fetch("/render", { method: "POST", body: fd });
+        data = await res.json();
+      } catch (err) {
+        if (debugOn) dbgWrite("#dbgErrors", String(err));
+        return;
+      }
+      const t1 = performance.now();
+
+      if (!data.ok) {
+        if (debugOn) {
+          dbgWrite("#dbgStatus", `Server error in ${(t1 - t0).toFixed(1)}ms`);
+          dbgWrite("#dbgErrors", data.error || "Unknown error");
+        }
+        return;
+      }
+
+      let code = (data.mermaid || "").trim();
+      code = code.replace(/\\n/g, "\n"); // if backend escaped newlines
+      $("#mermaidCode").value = code;
+
+      try {
+        window.initMermaid();
+        const { svg } = await mermaid.render("mmd-" + Math.random().toString(36).slice(2), code);
+        $("#diagram").innerHTML = svg;
+
+        if (debugOn) {
+          const lines = (code.match(/\n/g) || []).length + 1;
+          dbgWrite("#dbgStatus", `Rendered OK in ${(performance.now() - t0).toFixed(1)}ms\nLines: ${lines}`);
+          dbgWrite("#dbgEnv", `Mermaid version: ${window.mermaid?.version || "unknown"}`);
+        }
+      } catch (err) {
+        if (debugOn) {
+          dbgWrite("#dbgStatus", `Render failed in ${(performance.now() - t0).toFixed(1)}ms`);
+          dbgWrite("#dbgErrors", `Mermaid render error: ${err?.message || err}`);
+          dbgWrite("#dbgEnv", `Mermaid version: ${window.mermaid?.version || "unknown"}`);
+        }
+      }
+    }
+  </script>
+</body>
+</html>
